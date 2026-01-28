@@ -1,18 +1,13 @@
-<!-- 登录页面 -->
 <script setup lang="ts">
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElNotification } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { fetchLogin } from '@/api/auth'
-import AppConfig from '@/config'
-import { useSettingStore } from '@/store/modules/setting'
+import { getImageCaptcha } from '@/api/captcha'
 import { useUserStore } from '@/store/modules/user'
 import { HttpError } from '@/utils/http/error'
 
 defineOptions({ name: 'Login' })
 
-const settingStore = useSettingStore()
-const { isDark } = storeToRefs(settingStore)
 const { t, locale } = useI18n()
 const formKey = ref(0)
 
@@ -21,55 +16,23 @@ watch(locale, () => {
   formKey.value++
 })
 
-type AccountKey = 'super' | 'admin' | 'user'
-
-export interface Account {
-  key: AccountKey
-  label: string
-  userName: string
-  password: string
-  roles: string[]
-}
-
-const accounts = computed<Account[]>(() => [
-  {
-    key: 'super',
-    label: t('login.roles.super'),
-    userName: 'Super',
-    password: '123456',
-    roles: ['R_SUPER'],
-  },
-  {
-    key: 'admin',
-    label: t('login.roles.admin'),
-    userName: 'Admin',
-    password: '123456',
-    roles: ['R_ADMIN'],
-  },
-  {
-    key: 'user',
-    label: t('login.roles.user'),
-    userName: 'User',
-    password: '123456',
-    roles: ['R_USER'],
-  },
-])
-
-const dragVerify = ref()
-
 const userStore = useUserStore()
 const router = useRouter()
 const route = useRoute()
-const isPassing = ref(false)
-const isClickPass = ref(false)
-
-const systemName = AppConfig.systemInfo.name
+const captchaImgBase64 = ref<string>()
 const formRef = ref<FormInstance>()
+const isCaptchaEnabled = ref<boolean>(true)
+
+// 验证码过期定时器
+let timer: ReturnType<typeof setTimeout> | null = null
 
 const formData = reactive({
-  account: '',
-  username: '',
-  password: '',
+  tenantCode: '',
+  username: 'admin',
+  password: 'admin123',
+  captcha: '',
+  uuid: '',
+  expired: false,
   rememberPassword: true,
 })
 
@@ -80,17 +43,40 @@ const rules = computed<FormRules>(() => ({
 
 const loading = ref(false)
 
-onMounted(() => {
-  setupAccount('super')
-})
-
-// 设置账号
-function setupAccount(key: AccountKey) {
-  const selectedAccount = accounts.value.find((account: Account) => account.key === key)
-  formData.account = key
-  formData.username = selectedAccount?.userName ?? ''
-  formData.password = selectedAccount?.password ?? ''
+async function getCaptcha() {
+  const { uuid, img, expireTime, isEnabled } = await getImageCaptcha()
+  isCaptchaEnabled.value = isEnabled
+  captchaImgBase64.value = img
+  formData.uuid = uuid
+  formData.expired = false
+  startTimer(expireTime, Date.now())
 }
+
+// 验证码过期定时器
+function startTimer(expireTime: number, curTime: number = Date.now()) {
+  if (timer) {
+    clearTimeout(timer)
+  }
+  const remainingTime = expireTime - curTime
+
+  // 已经过期
+  if (remainingTime <= 0) {
+    formData.expired = true
+    return
+  }
+
+  // 设置过期定时器
+  timer = setTimeout(() => {
+    formData.expired = true
+  }, remainingTime)
+}
+
+// 组件销毁时清理定时器
+onBeforeUnmount(() => {
+  if (timer) {
+    clearTimeout(timer)
+  }
+})
 
 // 登录
 async function handleSubmit() {
@@ -103,30 +89,35 @@ async function handleSubmit() {
     if (!valid)
       return
 
-    // 拖拽验证
-    if (!isPassing.value) {
-      isClickPass.value = true
+    // 检查验证码是否过期
+    if (isCaptchaEnabled.value && formData.expired) {
+      ElNotification.error(t('login.error.captchaExpired'))
+      // getCaptcha() // 刷新验证码
       return
     }
 
     loading.value = true
 
     // 登录请求
-    const { username, password } = formData
+    const { username, password, captcha, uuid, tenantCode } = formData
 
-    const { token, refreshToken } = await fetchLogin({
-      userName: username,
-      password,
-    })
+    // 密码加密
+    // const encryptedPassword = encryptByRsa(password)
+    // if (!encryptedPassword) {
+    //   ElNotification.error(`${t('login.error.passwordEncrypt')}`)
+    //   return
+    // }
 
-    // 验证token
-    if (!token) {
-      throw new Error('Login failed - no token received')
-    }
-
-    // 存储 token 和登录状态
-    userStore.setToken(token, refreshToken)
-    userStore.setLoginStatus(true)
+    // 1. 登录获取 token
+    await userStore.accountLogin(
+      {
+        username,
+        password,
+        captcha: isCaptchaEnabled.value ? captcha : undefined,
+        uuid: isCaptchaEnabled.value ? uuid : undefined,
+      },
+      tenantCode,
+    )
 
     // 登录成功处理
     showLoginSuccessNotice()
@@ -138,41 +129,40 @@ async function handleSubmit() {
   catch (error) {
     // 处理 HttpError
     if (error instanceof HttpError) {
-      // console.log(error.code)
+      // 验证码错误时刷新验证码
+      if (isCaptchaEnabled.value) {
+        // getCaptcha()
+      }
     }
     else {
-      // 处理非 HttpError
-      // ElMessage.error('登录失败，请稍后重试')
       console.error('[Login] Unexpected error:', error)
     }
   }
   finally {
     loading.value = false
-    resetDragVerify()
   }
-}
-
-// 重置拖拽验证
-function resetDragVerify() {
-  dragVerify.value.reset()
 }
 
 // 登录成功提示
 function showLoginSuccessNotice() {
   setTimeout(() => {
+    // 直接从 store 获取最新的用户信息（响应式）
+    const userInfo = userStore.info
     ElNotification({
       title: t('login.success.title'),
       type: 'success',
       duration: 2500,
       zIndex: 10000,
-      message: `${t('login.success.message')}, ${systemName}!`,
+      message: `${t('login.success.message')}, ${userInfo?.nickname}!`,
     })
   }, 1000)
 }
+
+onMounted(getCaptcha)
 </script>
 
 <template>
-  <div class="flex w-full h-screen">
+  <div class="flex w-full h-screen bg-[var(--art-color)]">
     <LoginLeftView />
 
     <div class="relative flex-1">
@@ -194,17 +184,12 @@ function showLoginSuccessNotice() {
             style="margin-top: 25px"
             @keyup.enter="handleSubmit"
           >
-            <ElFormItem prop="account">
-              <ElSelect v-model="formData.account" @change="setupAccount">
-                <ElOption
-                  v-for="account in accounts"
-                  :key="account.key"
-                  :label="account.label"
-                  :value="account.key"
-                >
-                  <span>{{ account.label }}</span>
-                </ElOption>
-              </ElSelect>
+            <ElFormItem prop="tenantCode">
+              <ElInput
+                v-model.trim="formData.tenantCode"
+                class="custom-height"
+                :placeholder="$t('login.placeholder.tenantCode')"
+              />
             </ElFormItem>
             <ElFormItem prop="username">
               <ElInput
@@ -224,30 +209,23 @@ function showLoginSuccessNotice() {
               />
             </ElFormItem>
 
-            <!-- 推拽验证 -->
-            <div class="relative pb-5 mt-6">
-              <div
-                class="relative z-[2] overflow-hidden select-none rounded-lg border border-transparent tad-300"
-                :class="{ '!border-[#FF4E4F]': !isPassing && isClickPass }"
-              >
-                <ArtDragVerify
-                  ref="dragVerify"
-                  v-model:value="isPassing"
-                  :text="$t('login.sliderText')"
-                  text-color="var(--art-gray-700)"
-                  :success-text="$t('login.sliderSuccessText')"
-                  progress-bar-bg="var(--main-color)"
-                  :background="isDark ? '#26272F' : '#F1F1F4'"
-                  handler-bg="var(--default-box-color)"
-                />
+            <!-- 图片验证 -->
+            <ElFormItem v-if="isCaptchaEnabled" prop="captcha">
+              <ElInput
+                v-model="formData.captcha"
+                :placeholder="$t('login.placeholder.captcha')"
+                :max-length="4"
+                clearable
+                class="custom-height"
+                style="flex: 1 1"
+              />
+              <div class="captcha-container">
+                <img :src="captchaImgBase64" :alt="$t('login.captcha')" class="captcha">
+                <div v-if="formData.expired" class="overlay">
+                  <p>{{ $t('login.expired') }}</p>
+                </div>
               </div>
-              <p
-                class="absolute top-0 z-[1] px-px mt-2 text-xs text-[#f56c6c] tad-300"
-                :class="{ 'translate-y-10': !isPassing && isClickPass }"
-              >
-                {{ $t('login.placeholder.slider') }}
-              </p>
-            </div>
+            </ElFormItem>
 
             <div class="flex-cb mt-2 text-sm">
               <ElCheckbox v-model="formData.rememberPassword">

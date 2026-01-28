@@ -1,39 +1,13 @@
 import type { AppRouteRecord } from '@/types/router'
-/**
- * 用户状态管理模块
- *
- * 提供用户相关的状态管理
- *
- * ## 主要功能
- *
- * - 用户登录状态管理
- * - 用户信息存储
- * - 访问令牌和刷新令牌管理
- * - 语言设置
- * - 搜索历史记录
- * - 锁屏状态和密码管理
- * - 登出清理逻辑
- *
- * ## 使用场景
- *
- * - 用户登录和认证
- * - 权限验证
- * - 个人信息展示
- * - 多语言切换
- * - 锁屏功能
- * - 搜索历史管理
- *
- * ## 持久化
- *
- * - 使用 localStorage 存储
- * - 存储键：sys-v{version}-user
- * - 登出时自动清理
- *
- * @module store/modules/user
- * @author Art Design Pro Team
- */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import {
+  accountLogin as fetchAccountLogin,
+  emailLogin as fetchEmailLogin,
+  phoneLogin as fetchPhoneLogin,
+  socialAuth as fetchSocialAuth,
+  getUserInfo as fetchUserInfo,
+} from '@/api/auth'
 import { LanguageEnum } from '@/enums/appEnum'
 import { router } from '@/router'
 import { resetRouterState } from '@/router/guards/beforeEach'
@@ -41,6 +15,7 @@ import { setPageTitle } from '@/utils/router'
 import { StorageConfig } from '@/utils/storage/storage-config'
 import { useMenuStore } from './menu'
 import { useSettingStore } from './setting'
+import { useTenantStore } from './tenant'
 import { useWorktabStore } from './worktab'
 
 /**
@@ -59,13 +34,30 @@ export const useUserStore = defineStore(
     // 锁屏密码
     const lockPassword = ref('')
     // 用户信息
-    const info = ref<Partial<Api.Auth.UserInfo>>({})
+    const info = ref<Api.UserInfo>({
+      id: '',
+      username: '',
+      nickname: '',
+      gender: 0,
+      email: '',
+      phone: '',
+      avatar: '',
+      pwdResetTime: '',
+      pwdExpired: false,
+      registrationDate: '',
+      deptName: '',
+      roles: [],
+      roleNames: [],
+      permissions: [],
+    })
     // 搜索历史记录
     const searchHistory = ref<AppRouteRecord[]>([])
     // 访问令牌
     const accessToken = ref('')
     // 刷新令牌
     const refreshToken = ref('')
+    // 客户端ID
+    const clientId = import.meta.env.VITE_CLIENT_ID
 
     // 计算属性：获取用户信息
     const getUserInfo = computed(() => info.value)
@@ -73,12 +65,13 @@ export const useUserStore = defineStore(
     const getSettingState = computed(() => useSettingStore().$state)
     // 计算属性：获取工作台状态
     const getWorktabState = computed(() => useWorktabStore().$state)
-
+    // 租户状态
+    const tenantStore = useTenantStore()
     /**
      * 设置用户信息
      * @param newInfo 新的用户信息
      */
-    const setUserInfo = (newInfo: Api.Auth.UserInfo) => {
+    const setUserInfo = (newInfo: Api.UserInfo) => {
       info.value = newInfo
     }
 
@@ -136,19 +129,87 @@ export const useUserStore = defineStore(
     }
 
     /**
+     * 登录成功后统一处理
+     * 设置登录状态、令牌、租户ID，并获取用户信息
+     * @param token 访问令牌
+     * @param tenantId 租户ID
+     */
+    const handleLoginSuccess = async (token: string, tenantId: string) => {
+      setLoginStatus(true)
+      setToken(token)
+      tenantStore.setTenantId(tenantId)
+      // 获取并缓存用户信息，避免路由守卫中重复请求
+      const userInfo = await fetchUserInfo()
+      setUserInfo(userInfo)
+    }
+
+    // 登录
+    const accountLogin = async (req: Api.AccountLoginReq, tenantCode?: string) => {
+      const res = await fetchAccountLogin(
+        { ...req, clientId, authType: 'ACCOUNT' },
+        tenantCode,
+      )
+      await handleLoginSuccess(res.token, res.tenantId)
+    }
+
+    // 邮箱登录
+    const emailLogin = async (req: Api.EmailLoginReq, tenantCode?: string) => {
+      const res = await fetchEmailLogin(
+        { ...req, clientId, authType: 'EMAIL' },
+        tenantCode,
+      )
+      await handleLoginSuccess(res.token, res.tenantId)
+    }
+
+    // 手机号登录
+    const phoneLogin = async (req: Api.PhoneLoginReq, tenantCode?: string) => {
+      const { token, tenantId } = await fetchPhoneLogin(
+        { ...req, clientId, authType: 'PHONE' },
+        tenantCode,
+      )
+      await handleLoginSuccess(token, tenantId)
+    }
+
+    // 三方账号登录
+    const socialLogin = async (source: string, req: any) => {
+      const res = await fetchSocialAuth({
+        ...req,
+        source,
+        clientId,
+        authType: 'SOCIAL',
+      })
+      await handleLoginSuccess(res.token, res.tenantId)
+    }
+
+    /**
      * 退出登录
      * 清空所有用户相关状态并跳转到登录页
      * 如果是同一账号重新登录，保留工作台标签页
      */
     const logOut = () => {
       // 保存当前用户 ID，用于下次登录时判断是否为同一用户
-      const currentUserId = info.value.userId
+      const currentUserId = info.value.id
       if (currentUserId) {
         localStorage.setItem(StorageConfig.LAST_USER_ID_KEY, String(currentUserId))
       }
 
       // 清空用户信息
-      info.value = {}
+      info.value = {
+        id: '',
+        username: '',
+        nickname: '',
+        gender: 0,
+        email: '',
+        phone: '',
+        avatar: '',
+        pwdResetTime: '',
+        pwdExpired: false,
+        registrationDate: '',
+        deptName: '',
+        roles: [],
+        roleNames: [],
+        permissions: [],
+      }
       // 重置登录状态
       isLogin.value = false
       // 重置锁屏状态
@@ -182,7 +243,7 @@ export const useUserStore = defineStore(
      */
     const checkAndClearWorktabs = () => {
       const lastUserId = localStorage.getItem(StorageConfig.LAST_USER_ID_KEY)
-      const currentUserId = info.value.userId
+      const currentUserId = info.value.id
 
       // 无法获取当前用户 ID，跳过检查
       if (!currentUserId)
@@ -223,6 +284,11 @@ export const useUserStore = defineStore(
       setLockStatus,
       setLockPassword,
       setToken,
+      handleLoginSuccess,
+      accountLogin,
+      emailLogin,
+      phoneLogin,
+      socialLogin,
       logOut,
       checkAndClearWorktabs,
     }
