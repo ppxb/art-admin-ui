@@ -2,21 +2,22 @@ import type { PluginOption } from 'vite'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 
-import appInfo from './app-info'
-import createAutoImport from './auto-import'
-import creaetComponents from './components'
-import createCompression from './compression'
-import createDevtools from './devtools'
-import createElementPlus from './element-plus'
+import createAppInfoPlugin from './app-info'
+import createAutoImportPlugin from './auto-import'
+import creaetComponentsPlugin from './components'
+import createCompressionPlugin from './compression'
+import createDevtoolsPlugin from './devtools'
+import createElementPlusPlugin from './element-plus'
 
-export default function createVitePlugins(viteEnv: ImportMetaEnv, isBuild = false) {
-  const { VITE_ENABLE_DEVTOOLS } = viteEnv
+export default function createVitePlugins(viteEnv: ImportMetaEnv) {
+  const { VITE_ENABLE_DEVTOOLS, VITE_APP_VERSION } = viteEnv
 
-  const vitePlugins: (PluginOption | PluginOption[])[] = [vue(), tailwindcss(), appInfo()]
-  vitePlugins.push(createDevtools(VITE_ENABLE_DEVTOOLS))
-  vitePlugins.push(createAutoImport())
-  vitePlugins.push(creaetComponents())
-  vitePlugins.push(createElementPlus())
-  vitePlugins.push(createCompression())
+  const vitePlugins: (PluginOption | PluginOption[])[] = [vue(), tailwindcss()]
+  vitePlugins.push(createAppInfoPlugin(VITE_APP_VERSION))
+  vitePlugins.push(createAutoImportPlugin())
+  vitePlugins.push(creaetComponentsPlugin())
+  vitePlugins.push(createElementPlusPlugin())
+  vitePlugins.push(createDevtoolsPlugin(VITE_ENABLE_DEVTOOLS))
+  vitePlugins.push(createCompressionPlugin())
   return vitePlugins
 }

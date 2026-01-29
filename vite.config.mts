@@ -4,10 +4,10 @@ import { defineConfig, loadEnv } from 'vite'
 
 import createVitePlugins from './plugins'
 
-export default defineConfig(({ command, mode }) => {
+export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd()) as ImportMetaEnv
 
-  const { VITE_APP_VERSION, VITE_BASE_URL, VITE_API_PROXY_URL, VITE_APP_PORT, VITE_API_URL } = env
+  const { VITE_APP_VERSION, VITE_BASE_URL, VITE_API_PROXY_URL, VITE_APP_PORT, VITE_API_PREFIX } = env
 
   return defineConfig({
     resolve: {
@@ -21,7 +21,7 @@ export default defineConfig(({ command, mode }) => {
         '@styles': resolvePath('src/assets/styles'),
       },
     },
-    plugins: createVitePlugins(env, command === 'build'),
+    plugins: createVitePlugins(env),
     define: {
       __APP_VERSION__: JSON.stringify(VITE_APP_VERSION),
     },
@@ -29,11 +29,11 @@ export default defineConfig(({ command, mode }) => {
     server: {
       port: +VITE_APP_PORT,
       proxy: {
-        [VITE_API_URL]: {
+        [VITE_API_PREFIX]: {
           target: VITE_API_PROXY_URL,
           changeOrigin: true,
           secure: false,
-          rewrite: path => path.replace(new RegExp(`^${VITE_API_URL}`), ''),
+          rewrite: path => path.replace(new RegExp(`^${VITE_API_PREFIX}`), ''),
         },
       },
       host: true,

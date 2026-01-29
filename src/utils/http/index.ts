@@ -132,11 +132,11 @@ function triggerDownload(blob: Blob, filename: string): void {
   setTimeout(() => window.URL.revokeObjectURL(url), 100)
 }
 
-const { VITE_API_URL, VITE_WITH_CREDENTIALS } = import.meta.env
+const { VITE_API_PREFIX, VITE_WITH_CREDENTIALS } = import.meta.env
 
 const axiosInstance = axios.create({
   timeout: REQUEST_TIMEOUT,
-  baseURL: VITE_API_URL,
+  baseURL: VITE_API_PREFIX,
   withCredentials: VITE_WITH_CREDENTIALS === 'true',
   validateStatus: status => status >= 200 && status < 300,
   transformResponse: [
